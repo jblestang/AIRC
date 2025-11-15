@@ -160,6 +160,10 @@ impl DigitalElevationModel {
         }
     }
 
+    pub fn elevation_value(&self, row: usize, col: usize) -> f64 {
+        self.grid[(row, col)]
+    }
+
     pub fn profile_between(
         &self,
         start: (f64, f64),

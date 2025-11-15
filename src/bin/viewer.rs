@@ -3,9 +3,11 @@ use std::f32::consts::PI;
 use anyhow::Result;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin};
 use bevy::pbr::AmbientLight;
 use bevy::prelude::shape;
 use bevy::prelude::*;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::texture::ImagePlugin;
 use bevy::window::WindowPlugin;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
@@ -58,11 +60,18 @@ fn launch_viewer() -> Result<()> {
             EguiPlugin,
             LogDiagnosticsPlugin::default(),
             FrameTimeDiagnosticsPlugin::default(),
+            WireframePlugin,
         ))
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
-            (radar_ui_panel, update_point_visuals, orbit_camera_input),
+            (
+                radar_ui_panel,
+                update_point_visuals,
+                update_radar_marker,
+                update_terrain_surface,
+                orbit_camera_input,
+            ),
         )
         .run();
 
@@ -72,6 +81,7 @@ fn launch_viewer() -> Result<()> {
 #[derive(Resource, Clone)]
 struct CoverageData {
     result: radarc::coverage::CoverageResult,
+    dem: DigitalElevationModel,
     center_world_m: Vec2,
     plane_size_km: Vec2,
     radar_translation: Vec3,
@@ -98,6 +108,7 @@ impl CoverageData {
         );
         Self {
             result,
+            dem: dem.clone(),
             center_world_m,
             plane_size_km,
             radar_translation,
@@ -134,6 +145,14 @@ enum CoverageCategory {
 struct PointAnchor {
     xy: Vec2,
     height: f32,
+}
+
+#[derive(Component)]
+struct TerrainSurface;
+
+#[derive(Component)]
+struct RadarMarker {
+    base_height: f32,
 }
 
 #[derive(Component)]
@@ -188,6 +207,23 @@ fn setup_scene(
         ..Default::default()
     });
 
+    let terrain_mesh = meshes.add(build_dem_mesh(&data.dem, data.center_world_m));
+    let terrain_material = materials.add(StandardMaterial {
+        base_color: Color::rgba(0.2, 0.4, 0.6, 0.05),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..Default::default()
+    });
+    commands
+        .spawn(PbrBundle {
+            mesh: terrain_mesh,
+            material: terrain_material,
+            transform: Transform::from_scale(Vec3::new(1.0, settings.height_exaggeration, 1.0)),
+            ..Default::default()
+        })
+        .insert(TerrainSurface)
+        .insert(Wireframe);
+
     let radar_mesh = meshes.add(Mesh::from(shape::Cylinder {
         radius: 0.18,
         height: 1.0,
@@ -197,9 +233,16 @@ fn setup_scene(
     commands.spawn(PbrBundle {
         mesh: radar_mesh.clone(),
         material: radar_material,
-        transform: Transform::from_translation(data.radar_translation)
-            .with_scale(Vec3::new(1.0, 2.0, 1.0)),
+        transform: Transform::from_translation(Vec3::new(
+            data.radar_translation.x,
+            data.radar_translation.y * settings.height_exaggeration,
+            data.radar_translation.z,
+        ))
+        .with_scale(Vec3::new(1.0, 2.0, 1.0)),
         ..Default::default()
+    })
+    .insert(RadarMarker {
+        base_height: data.radar_translation.y,
     });
 
     let visible_material = materials.add(Color::rgb(0.15, 0.82, 0.45).into());
@@ -215,7 +258,7 @@ fn setup_scene(
         CoverageCategory::Visible,
         sphere_mesh.clone(),
         visible_material.clone(),
-        settings.point_scale,
+        &settings,
         &data,
     );
 
@@ -225,7 +268,7 @@ fn setup_scene(
         CoverageCategory::Occluded,
         sphere_mesh,
         occluded_material,
-        settings.point_scale,
+        &settings,
         &data,
     );
 }
@@ -236,7 +279,7 @@ fn spawn_points(
     category: CoverageCategory,
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
-    point_scale: f32,
+    settings: &VisualizationSettings,
     data: &CoverageData,
 ) {
     for point in points {
@@ -247,9 +290,16 @@ fn spawn_points(
             ),
             height: (point.target_altitude_m as f32) * Z_SCALE,
         };
-        let mut transform =
-            Transform::from_translation(Vec3::new(anchor.xy.x, anchor.height, anchor.xy.y));
-        transform.scale = Vec3::splat(point_scale);
+        let mut transform = Transform::from_translation(Vec3::new(
+            anchor.xy.x,
+            anchor.height * settings.height_exaggeration,
+            anchor.xy.y,
+        ));
+        transform.scale = Vec3::splat(settings.point_scale);
+        let show = match category {
+            CoverageCategory::Visible => settings.show_visible,
+            CoverageCategory::Occluded => settings.show_occluded,
+        };
         commands
             .spawn(PbrBundle {
                 mesh: mesh.clone(),
@@ -259,8 +309,60 @@ fn spawn_points(
             })
             .insert(category)
             .insert(anchor)
-            .insert(Visibility::Visible);
+            .insert(if show {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            });
     }
+}
+
+fn build_dem_mesh(dem: &DigitalElevationModel, center_world_m: Vec2) -> Mesh {
+    let width = dem.width();
+    let height = dem.height();
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(width * height);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(width * height);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(width * height);
+
+    let max_u = (width.saturating_sub(1)).max(1) as f32;
+    let max_v = (height.saturating_sub(1)).max(1) as f32;
+
+    for row in 0..height {
+        for col in 0..width {
+            let x_world = dem.origin_x_m + col as f64 * dem.cell_size_m;
+            let y_world = dem.origin_y_m + row as f64 * dem.cell_size_m;
+            let elevation = dem.elevation_value(row, col);
+            positions.push([
+                ((x_world as f32) - center_world_m.x) * XY_SCALE,
+                (elevation as f32) * Z_SCALE,
+                ((y_world as f32) - center_world_m.y) * XY_SCALE,
+            ]);
+            normals.push([0.0, 1.0, 0.0]);
+            uvs.push([col as f32 / max_u, row as f32 / max_v]);
+        }
+    }
+
+    let mut indices: Vec<u32> = Vec::new();
+    if width > 1 && height > 1 {
+        for row in 0..(height - 1) {
+            for col in 0..(width - 1) {
+                let i0 = (row * width + col) as u32;
+                let i1 = (row * width + col + 1) as u32;
+                let i2 = ((row + 1) * width + col) as u32;
+                let i3 = ((row + 1) * width + col + 1) as u32;
+                indices.extend_from_slice(&[i0, i2, i1, i1, i2, i3]);
+            }
+        }
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    if !indices.is_empty() {
+        mesh.set_indices(Some(Indices::U32(indices)));
+    }
+    mesh
 }
 
 fn radar_ui_panel(
