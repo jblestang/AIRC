@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use plotly::common::Orientation;
 use plotly::common::{HoverInfo, Marker, Mode};
 use plotly::layout::{Layout, Legend};
 use plotly::{Plot, Scatter};
@@ -42,18 +43,9 @@ pub fn build_coverage_plot(result: &CoverageResult) -> Plot {
     plot.set_layout(
         Layout::new()
             .title("Radar coverage projection")
-            .x_axis(
-                plotly::layout::Axis::new()
-                    .title("Easting (m)")
-                    .scale_anchor("y")
-                    .scale_ratio(1.0),
-            )
+            .x_axis(plotly::layout::Axis::new().title("Easting (m)"))
             .y_axis(plotly::layout::Axis::new().title("Northing (m)"))
-            .legend(
-                Legend::new()
-                    .orientation(plotly::layout::LegendOrientation::Horizontal)
-                    .y(-0.2),
-            ),
+            .legend(Legend::new().orientation(Orientation::Horizontal).y(-0.2)),
     );
 
     plot
@@ -93,7 +85,7 @@ fn build_trace(
         .name(name)
         .marker(
             Marker::new()
-                .size(size as f64)
+                .size(size)
                 .opacity(if include_reason { 0.7 } else { 0.85 })
                 .color(color),
         )

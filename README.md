@@ -7,11 +7,14 @@ interactive Plotly map of visible vs occluded terrain cells above a configurable
 ## Getting started
 
 ```bash
-cargo run --bin demo
+cargo run --bin demo          # static Plotly HTML output
+cargo run --bin viewer        # interactive Bevy + egui 3D scene
 ```
 
-This command reads the synthetic DEM shipped in `data/sample_dem.json`,
+The CLI demo reads the synthetic DEM shipped in `data/sample_dem.json`,
 places a radar in the southwest corner, and writes `artifacts/coverage_map.html`.
+The `viewer` binary loads the same scenario into a 3D scene where you can toggle
+visible / occluded points and exaggerate heights through an egui control panel.
 
 ## Features
 
@@ -30,7 +33,9 @@ places a radar in the southwest corner, and writes `artifacts/coverage_map.html`
 │   ├── dem.rs           # DEM utilities
 │   ├── coverage.rs      # Visibility logic
 │   ├── visualize.rs     # Plotly helpers
-│   └── bin/demo.rs      # Example CLI
+│   └── bin/
+│       ├── demo.rs      # HTML-exporting CLI
+│       └── viewer.rs    # Bevy + egui interactive app
 └── tests/               # Integration tests
 ```
 
