@@ -7,14 +7,18 @@ interactive Plotly map of visible vs occluded terrain cells above a configurable
 ## Getting started
 
 ```bash
-cargo run --bin demo          # static Plotly HTML output
-cargo run --bin viewer        # interactive Bevy + egui 3D scene
+cargo run --bin demo                               # static Plotly HTML output
+cargo run --bin viewer --features viewer           # interactive Bevy + egui 3D scene
+cargo run --bin viewer --features viewer -- --capture-wireframe   # capture Bevy wireframe screenshot
+cargo run --bin wireframe_snapshot                 # headless DEM wireframe PNG
 ```
 
 The CLI demo reads the synthetic DEM shipped in `data/sample_dem.json`,
 places a radar in the southwest corner, and writes `artifacts/coverage_map.html`.
 The `viewer` binary loads the same scenario into a 3D scene where you can toggle
 visible / occluded points and exaggerate heights through an egui control panel.
+The `viewer` target is gated behind the `viewer` cargo feature because its Bevy
+dependencies currently require a newer Rust toolchain (≥1.85).
 
 ## Features
 
@@ -34,8 +38,9 @@ visible / occluded points and exaggerate heights through an egui control panel.
 │   ├── coverage.rs      # Visibility logic
 │   ├── visualize.rs     # Plotly helpers
 │   └── bin/
-│       ├── demo.rs      # HTML-exporting CLI
-│       └── viewer.rs    # Bevy + egui interactive app
+│       ├── demo.rs              # HTML-exporting CLI
+│       ├── viewer.rs            # Bevy + egui interactive app
+│       └── wireframe_snapshot.rs # Headless wireframe renderer
 └── tests/               # Integration tests
 ```
 

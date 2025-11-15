@@ -132,8 +132,8 @@ impl DigitalElevationModel {
 
         let x0 = fx.floor() as usize;
         let y0 = fy.floor() as usize;
-        let x1 = x0.min(self.width() - 1);
-        let y1 = y0.min(self.height() - 1);
+        let x1 = (x0 + 1).min(self.width() - 1);
+        let y1 = (y0 + 1).min(self.height() - 1);
         let dx = fx - x0 as f64;
         let dy = fy - y0 as f64;
 

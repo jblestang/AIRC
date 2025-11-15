@@ -5,7 +5,7 @@ use anyhow::Result;
 use plotly::common::Orientation;
 use plotly::common::{HoverInfo, Marker, Mode};
 use plotly::layout::{Layout, Legend};
-use plotly::{Plot, Scatter};
+use plotly::{Plot, Scatter, Trace};
 
 use crate::coverage::{CoveragePoint, CoverageResult};
 
@@ -53,11 +53,11 @@ pub fn build_coverage_plot(result: &CoverageResult) -> Plot {
 
 fn build_trace(
     points: &[CoveragePoint],
-    name: &str,
-    color: &str,
+    name: &'static str,
+    color: &'static str,
     size: usize,
     include_reason: bool,
-) -> Scatter {
+) -> Box<dyn Trace> {
     let xs: Vec<f64> = points.iter().map(|p| p.x_m).collect();
     let ys: Vec<f64> = points.iter().map(|p| p.y_m).collect();
     let hover: Vec<String> = points

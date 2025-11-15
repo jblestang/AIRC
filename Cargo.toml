@@ -14,7 +14,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 plotly = "0.9"
 thiserror = "1.0"
-bevy = { version = "0.12", default-features = false, features = [
+bevy = { version = "0.12", default-features = false, optional = true, features = [
     "bevy_asset",
     "bevy_core_pipeline",
     "bevy_pbr",
@@ -24,7 +24,31 @@ bevy = { version = "0.12", default-features = false, features = [
     "png",
     "x11"
 ] }
-bevy_egui = "0.24"
+bevy_egui = { version = "0.24", optional = true }
+plotters = { version = "0.3", default-features = false, features = ["bitmap_backend"] }
+png = "0.17"
+
+[features]
+default = []
+viewer = ["dep:bevy", "dep:bevy_egui"]
+
+[patch.crates-io]
+pxfm = { path = "vendor/pxfm-0.1.25/pxfm-0.1.25" }
+home = { path = "vendor/home-0.5.12/home-0.5.12" }
+moxcms = { path = "vendor/moxcms-0.7.9/moxcms-0.7.9" }
 
 [dev-dependencies]
 assert_approx_eq = "1.1"
+
+[[bin]]
+name = "demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "viewer"
+path = "src/bin/viewer.rs"
+required-features = ["viewer"]
+
+[[bin]]
+name = "wireframe_snapshot"
+path = "src/bin/wireframe_snapshot.rs"

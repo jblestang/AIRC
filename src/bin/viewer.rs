@@ -1,15 +1,18 @@
 use std::f32::consts::PI;
+use std::fs;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::mouse::{MouseMotion, MouseWheel};
-use bevy::pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin};
+use bevy::pbr::wireframe::{Wireframe, WireframePlugin};
 use bevy::pbr::AmbientLight;
 use bevy::prelude::shape;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::texture::ImagePlugin;
-use bevy::window::WindowPlugin;
+use bevy::render::view::screenshot::ScreenshotManager;
+use bevy::window::{PrimaryWindow, WindowPlugin};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use radarc::coverage::RadarCoverageCalculator;
 use radarc::dem::{DigitalElevationModel, RadarSite};
@@ -19,12 +22,13 @@ const Z_SCALE: f32 = 0.001; // meters -> kilometers
 const DEFAULT_POINT_SCALE: f32 = 0.35;
 
 fn main() {
-    if let Err(err) = launch_viewer() {
+    let capture_wireframe = std::env::args().any(|arg| arg == "--capture-wireframe");
+    if let Err(err) = launch_viewer(ViewerOptions { capture_wireframe }) {
         eprintln!("Failed to start viewer: {err:?}");
     }
 }
 
-fn launch_viewer() -> Result<()> {
+fn launch_viewer(options: ViewerOptions) -> Result<()> {
     let dem = DigitalElevationModel::from_json_file("data/sample_dem.json")?;
     let radar_site = RadarSite {
         x_m: 0.0,
@@ -32,12 +36,23 @@ fn launch_viewer() -> Result<()> {
         height_agl_m: 15.0,
     };
 
-    let calculator =
-        RadarCoverageCalculator::new(&dem, radar_site, Some(25.0), 20.0, 150.0, 4.0 / 3.0, None)?;
-    let coverage = calculator.compute();
-    let coverage_data = CoverageData::from_dem_and_result(&dem, coverage);
+    let coverage = {
+        let calculator = RadarCoverageCalculator::new(
+            &dem,
+            radar_site,
+            Some(25.0),
+            20.0,
+            150.0,
+            4.0 / 3.0,
+            None,
+        )?;
+        calculator.compute()
+    };
+    let coverage_data = CoverageData::from_dem_and_result(dem, coverage);
 
     App::new()
+        .insert_resource(options)
+        .insert_resource(ScreenshotState::default())
         .insert_resource(coverage_data)
         .insert_resource(VisualizationSettings::default())
         .insert_resource(AmbientLight {
@@ -89,7 +104,7 @@ struct CoverageData {
 
 impl CoverageData {
     fn from_dem_and_result(
-        dem: &DigitalElevationModel,
+        dem: DigitalElevationModel,
         result: radarc::coverage::CoverageResult,
     ) -> Self {
         let (min_x, min_y, max_x, max_y) = dem.extent();
@@ -108,7 +123,7 @@ impl CoverageData {
         );
         Self {
             result,
-            dem: dem.clone(),
+            dem,
             center_world_m,
             plane_size_km,
             radar_translation,
@@ -122,6 +137,17 @@ struct VisualizationSettings {
     show_occluded: bool,
     point_scale: f32,
     height_exaggeration: f32,
+}
+
+#[derive(Resource, Clone, Copy)]
+struct ViewerOptions {
+    capture_wireframe: bool,
+}
+
+#[derive(Resource, Default)]
+struct ScreenshotState {
+    requested: bool,
+    saved: bool,
 }
 
 impl Default for VisualizationSettings {
@@ -230,20 +256,21 @@ fn setup_scene(
         ..Default::default()
     }));
     let radar_material = materials.add(Color::rgb(0.95, 0.95, 0.2).into());
-    commands.spawn(PbrBundle {
-        mesh: radar_mesh.clone(),
-        material: radar_material,
-        transform: Transform::from_translation(Vec3::new(
-            data.radar_translation.x,
-            data.radar_translation.y * settings.height_exaggeration,
-            data.radar_translation.z,
-        ))
-        .with_scale(Vec3::new(1.0, 2.0, 1.0)),
-        ..Default::default()
-    })
-    .insert(RadarMarker {
-        base_height: data.radar_translation.y,
-    });
+    commands
+        .spawn(PbrBundle {
+            mesh: radar_mesh.clone(),
+            material: radar_material,
+            transform: Transform::from_translation(Vec3::new(
+                data.radar_translation.x,
+                data.radar_translation.y * settings.height_exaggeration,
+                data.radar_translation.z,
+            ))
+            .with_scale(Vec3::new(1.0, 2.0, 1.0)),
+            ..Default::default()
+        })
+        .insert(RadarMarker {
+            base_height: data.radar_translation.y,
+        });
 
     let visible_material = materials.add(Color::rgb(0.15, 0.82, 0.45).into());
     let occluded_material = materials.add(Color::rgb(0.9, 0.28, 0.28).into());
@@ -417,6 +444,61 @@ fn update_point_visuals(
         } else {
             Visibility::Hidden
         };
+    }
+}
+
+fn update_radar_marker(
+    settings: Res<VisualizationSettings>,
+    mut query: Query<(&RadarMarker, &mut Transform)>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    for (marker, mut transform) in &mut query {
+        transform.translation.y = marker.base_height * settings.height_exaggeration;
+    }
+}
+
+fn update_terrain_surface(
+    settings: Res<VisualizationSettings>,
+    mut query: Query<&mut Transform, With<TerrainSurface>>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    for mut transform in &mut query {
+        transform.scale.y = settings.height_exaggeration;
+    }
+}
+
+const OUTPUT_SCREENSHOT: &str = "artifacts/viewer_wireframe.png";
+
+fn capture_wireframe_screenshot(
+    options: Res<ViewerOptions>,
+    mut state: ResMut<ScreenshotState>,
+    mut screenshot_manager: ResMut<ScreenshotManager>,
+    window_query: Query<Entity, With<PrimaryWindow>>,
+) {
+    if !options.capture_wireframe || state.saved {
+        return;
+    }
+    let Ok(window) = window_query.get_single() else {
+        return;
+    };
+    let path = PathBuf::from(OUTPUT_SCREENSHOT);
+    if !state.requested {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if screenshot_manager
+            .save_screenshot(window, path.clone())
+            .is_ok()
+        {
+            state.requested = true;
+        }
+    } else if screenshot_manager.active_screenshot_count() == 0 {
+        state.saved = true;
+        println!("Saved wireframe screenshot to {}", path.display());
     }
 }
 
