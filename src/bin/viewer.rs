@@ -527,17 +527,13 @@ fn capture_wireframe_screenshot(
         return;
     };
     let path = PathBuf::from(OUTPUT_SCREENSHOT);
-    if !state.requested {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if screenshot_manager
-            .save_screenshot(window, path.clone())
-            .is_ok()
-        {
-            state.requested = true;
-        }
-    } else if screenshot_manager.active_screenshot_count() == 0 {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if screenshot_manager
+        .save_screenshot_to_disk(window, path.clone())
+        .is_ok()
+    {
         state.saved = true;
         println!("Saved wireframe screenshot to {}", path.display());
     }
@@ -546,7 +542,7 @@ fn capture_wireframe_screenshot(
 fn orbit_camera_input(
     mut motion_events: EventReader<MouseMotion>,
     mut scroll_events: EventReader<MouseWheel>,
-    buttons: Res<Input<MouseButton>>,
+    buttons: Res<ButtonInput<MouseButton>>,
     mut query: Query<(&mut OrbitCamera, &mut Transform)>,
 ) {
     let mut delta = Vec2::ZERO;
