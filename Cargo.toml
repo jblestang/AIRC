@@ -27,6 +27,7 @@ bevy = { version = "0.12", default-features = false, optional = true, features =
 bevy_egui = { version = "0.24", optional = true }
 plotters = { version = "0.3", default-features = false, features = ["bitmap_backend"] }
 png = "0.17"
+byteorder = "1.5"
 
 [features]
 default = []
@@ -52,3 +53,7 @@ required-features = ["viewer"]
 [[bin]]
 name = "wireframe_snapshot"
 path = "src/bin/wireframe_snapshot.rs"
+
+[[bin]]
+name = "hgt_wireframe"
+path = "src/bin/hgt_wireframe.rs"

@@ -1,26 +1,30 @@
-use std::fs::{self, File};
-use std::io::BufWriter;
-use std::path::Path;
-
-use anyhow::Result;
+use anyhow::{bail, Result};
 use plotters::prelude::*;
 use png::{BitDepth, ColorType, Encoder};
 use radarc::dem::DigitalElevationModel;
+use std::fs::{self, File};
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
+use std::{env};
 
-const OUTPUT_PATH: &str = "artifacts/dem_wireframe.png";
 const IMAGE_SIZE: (u32, u32) = (1600, 1200);
 const MARGIN: f64 = 40.0;
 const XY_SCALE: f64 = 1.0 / 1500.0;
 const Z_SCALE: f64 = 0.004;
 
 fn main() -> Result<()> {
-    let dem = DigitalElevationModel::from_json_file("data/sample_dem.json")?;
-    render_wireframe(&dem, Path::new(OUTPUT_PATH))?;
-    println!("Wireframe screenshot saved to {}", OUTPUT_PATH);
+    let mut args = env::args().skip(1);
+    let Some(path) = args.next() else {
+        bail!("usage: cargo run --bin hgt_wireframe -- <path/to/NxxWxxx.hgt>");
+    };
+    let dem = DigitalElevationModel::from_hgt_file(&path)?;
+    let out = PathBuf::from("artifacts/hgt_wireframe.png");
+    render_wireframe(&dem, &out)?;
+    println!("Saved {}", out.display());
     Ok(())
 }
 
-pub fn render_wireframe(dem: &DigitalElevationModel, path: &Path) -> Result<()> {
+fn render_wireframe(dem: &DigitalElevationModel, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -35,8 +39,10 @@ pub fn render_wireframe(dem: &DigitalElevationModel, path: &Path) -> Result<()> 
         for col in 0..width {
             let elev = dem.elevation_value(row, col);
             elevations[row][col] = elev;
-            min_elev = min_elev.min(elev);
-            max_elev = max_elev.max(elev);
+            if elev.is_finite() {
+                min_elev = min_elev.min(elev);
+                max_elev = max_elev.max(elev);
+            }
         }
     }
 
@@ -118,18 +124,15 @@ fn coord(x: f64, y: f64) -> (i32, i32) {
 }
 
 fn wire_color(value: f64, min: f64, max: f64) -> ShapeStyle {
-    let t = if max - min < f64::EPSILON {
+    let t = if !value.is_finite() {
+        0.0
+    } else if max - min < f64::EPSILON {
         0.5
     } else {
         ((value - min) / (max - min)).clamp(0.0, 1.0)
     };
-    let hue = 0.55 - 0.25 * t;
-    let rgba = HSLColor(hue, 0.7, 0.55).to_rgba();
-    ShapeStyle {
-        color: RGBColor(rgba.0, rgba.1, rgba.2).mix(0.9),
-        filled: false,
-        stroke_width: 1,
-    }
+    let rgba = HSLColor(0.55 - 0.25 * t, 0.7, 0.55).to_rgba();
+    ShapeStyle { color: RGBColor(rgba.0, rgba.1, rgba.2).mix(0.9), filled: false, stroke_width: 1 }
 }
 
 fn write_png(path: &Path, width: u32, height: u32, buffer: &[u8]) -> Result<()> {

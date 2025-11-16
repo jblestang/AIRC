@@ -2939,6 +2939,7 @@ dependencies = [
  "assert_approx_eq",
  "bevy",
  "bevy_egui",
+ "byteorder",
  "ndarray",
  "plotly",
  "plotters",

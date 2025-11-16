@@ -1,6 +1,6 @@
 use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use std::io::{BufReader, Read};
+use std::path::{Path, PathBuf};
 
 use ndarray::Array2;
 use serde::Deserialize;
@@ -19,6 +19,10 @@ pub enum DemError {
     Io(#[from] std::io::Error),
     #[error("failed to parse DEM json: {0}")]
     Parse(#[from] serde_json::Error),
+    #[error("invalid HGT file size: {0}")]
+    InvalidHgtSize(usize),
+    #[error("failed to parse HGT filename for geo origin: {0}")]
+    HgtName(PathBuf),
     #[error("DEM grid must be rectangular")]
     NonRectangular,
     #[error("DEM grid must be at least 1x1")]
@@ -53,6 +57,68 @@ impl DigitalElevationModel {
         let reader = BufReader::new(file);
         let data: DemFile = serde_json::from_reader(reader)?;
         Self::from_dem_file(data)
+    }
+
+    pub fn from_hgt_file<P: AsRef<Path>>(path: P) -> Result<Self, DemError> {
+        let path_ref = path.as_ref();
+        let mut file = File::open(path_ref)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let bytes = buf.len();
+        let side = match bytes / 2 {
+            n if n == 1201 * 1201 => 1201usize,
+            n if n == 3601 * 3601 => 3601usize,
+            _ => return Err(DemError::InvalidHgtSize(bytes)),
+        };
+
+        use byteorder::{BigEndian, ReadBytesExt};
+        let mut cursor = std::io::Cursor::new(&buf);
+        let mut values: Vec<f64> = Vec::with_capacity(side * side);
+        for _ in 0..(side * side) {
+            let v = cursor.read_i16::<BigEndian>()?;
+            if v == -32768 {
+                values.push(f64::NAN);
+            } else {
+                values.push(v as f64);
+            }
+        }
+        let grid = Array2::from_shape_vec((side, side), values).expect("shape ok");
+
+        // Parse SW corner from filename like N37W122.hgt
+        let name = path_ref
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| DemError::HgtName(path_ref.to_path_buf()))?;
+        let (lat_sign, rest) = name.split_at(1);
+        let (lat_deg_s, rest) = rest.split_at(2);
+        let (lon_sign, lon_deg_s) = rest.split_at(1);
+        let lat_deg: f64 = lat_deg_s.parse().map_err(|_| DemError::HgtName(path_ref.to_path_buf()))?;
+        let lon_deg: f64 = lon_deg_s
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .map_err(|_| DemError::HgtName(path_ref.to_path_buf()))?;
+        let lat0 = if lat_sign.eq_ignore_ascii_case("S") { -lat_deg } else { lat_deg };
+        let lon0 = if lon_sign.eq_ignore_ascii_case("W") { -lon_deg } else { lon_deg };
+
+        // Approx meters per degree at tile latitude
+        let meters_per_deg_lat = 111_320.0f64;
+        let meters_per_deg_lon = meters_per_deg_lat * (lat0.to_radians().cos());
+        let samples_per_degree = (side - 1) as f64;
+        let step_lon_deg = 1.0 / samples_per_degree;
+        let step_lat_deg = 1.0 / samples_per_degree;
+        // Use average step size as square cell size approximation
+        let cell_size_m = ((step_lat_deg * meters_per_deg_lat) + (step_lon_deg * meters_per_deg_lon)) * 0.5;
+
+        Ok(Self {
+            grid,
+            origin_x_m: 0.0, // treat SW corner as (0,0) in meters
+            origin_y_m: 0.0,
+            cell_size_m,
+            no_data_value: Some(f64::NAN),
+            description: Some(format!("HGT tile at lat {}, lon {}", lat0, lon0)),
+        })
     }
 
     pub fn from_rows(
