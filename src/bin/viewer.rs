@@ -16,8 +16,7 @@ use bevy::window::{PrimaryWindow, WindowPlugin};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use radarc::coverage::RadarCoverageCalculator;
 use radarc::dem::{DigitalElevationModel, RadarSite};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const XY_SCALE: f32 = 0.001; // meters -> kilometers
 const Z_SCALE: f32 = 0.001; // meters -> kilometers
