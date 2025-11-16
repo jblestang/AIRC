@@ -2,7 +2,7 @@ use std::f32::consts::PI;
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bevy::diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::pbr::wireframe::{Wireframe, WireframePlugin};
@@ -16,6 +16,8 @@ use bevy::window::{PrimaryWindow, WindowPlugin};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use radarc::coverage::RadarCoverageCalculator;
 use radarc::dem::{DigitalElevationModel, RadarSite};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 const XY_SCALE: f32 = 0.001; // meters -> kilometers
 const Z_SCALE: f32 = 0.001; // meters -> kilometers
@@ -29,7 +31,11 @@ fn main() {
 }
 
 fn launch_viewer(options: ViewerOptions) -> Result<()> {
-    let dem = DigitalElevationModel::from_json_file("data/sample_dem.json")?;
+    let dem = load_dem_from_repo().unwrap_or_else(|_| {
+        // Fallback to bundled sample if no HGT found
+        DigitalElevationModel::from_json_file("data/sample_dem.json")
+            .expect("failed to load fallback DEM")
+    });
     let radar_site = RadarSite {
         x_m: 0.0,
         y_m: 0.0,
@@ -91,6 +97,41 @@ fn launch_viewer(options: ViewerOptions) -> Result<()> {
         .run();
 
     Ok(())
+}
+
+fn load_dem_from_repo() -> Result<DigitalElevationModel> {
+    // Prefer an explicit path via env var
+    if let Ok(path) = std::env::var("RADARC_HGT") {
+        return DigitalElevationModel::from_hgt_file(Path::new(&path))
+            .with_context(|| format!("loading HGT at {}", path));
+    }
+    // Otherwise scan a sibling directory to `src`, typically `../DEM` or `../dem`
+    let candidates = [
+        PathBuf::from("../DEM"),
+        PathBuf::from("../dem"),
+        PathBuf::from("./DEM"),
+        PathBuf::from("./dem"),
+    ];
+    for dir in candidates {
+        if dir.is_dir() {
+            let mut first_hgt: Option<PathBuf> = None;
+            for entry in fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+                let entry = entry?;
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    if ext.to_string_lossy().eq_ignore_ascii_case("hgt") {
+                        first_hgt = Some(path);
+                        break;
+                    }
+                }
+            }
+            if let Some(hgt) = first_hgt {
+                return DigitalElevationModel::from_hgt_file(&hgt)
+                    .with_context(|| format!("loading {}", hgt.display()));
+            }
+        }
+    }
+    anyhow::bail!("No .hgt files found in sibling DEM directories; set RADARC_HGT to a tile path")
 }
 
 #[derive(Resource, Clone)]
